@@ -238,7 +238,9 @@
 <div class="toolbar">
   <span class="toolbar-label">Ações:</span>
   <button class="btn btn-cyan" onclick="window.print()">🖨 Imprimir</button>
-  <button class="btn btn-ghost" onclick="exportHTML()">💾 Salvar HTML</button>
+  <button class="btn btn-cyan" onclick="salvarAlteracoes()">💾 Salvar alterações</button>
+  <button class="btn btn-ghost" onclick="resetToken()">🔐 Token GitHub</button>
+  <button class="btn btn-ghost" onclick="exportHTML()">📥 Salvar HTML</button>
   <button class="btn btn-ghost" id="editModeBtn" onclick="toggleEditMode()">✏️ Edição Ativa</button>
   <button class="btn btn-ghost" onclick="openDatasModal()">🗓 Datas Comemorativas</button>
   <div class="month-nav" id="monthNav"><button class="month-btn" id="mnav0">Jan</button><button class="month-btn" id="mnav1">Fev</button><button class="month-btn" id="mnav2">Mar</button><button class="month-btn" id="mnav3">Abr</button><button class="month-btn active" id="mnav4">Mai</button><button class="month-btn" id="mnav5">Jun</button><button class="month-btn" id="mnav6">Jul</button><button class="month-btn" id="mnav7">Ago</button><button class="month-btn" id="mnav8">Set</button><button class="month-btn" id="mnav9">Out</button><button class="month-btn" id="mnav10">Nov</button><button class="month-btn" id="mnav11">Dez</button></div>
@@ -1148,12 +1150,38 @@ Slide 2: …" style="min-height:160px"></textarea>
 
 <div class="toast" id="toast">✅ Post salvo!</div>
 
+<script id="__persisted_state_script__">window.__PERSISTED_CALENDAR_STATE__=null;</script>
+
 <script>
 // ─────────────────────────────────────────────
 //  DATA STRUCTURES
 // ─────────────────────────────────────────────
 
 const MONTH_NAMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+// ── Configuração fixa do GitHub ──
+const GITHUB_CONFIG = {
+  owner: 'DigiThree-Planejamentos',
+  repo:  'calendario-gruta-das-estrelas',
+  branch:'main',
+  path:  'index.html'
+};
+
+// ── Token ──
+function getToken(){
+  let token = localStorage.getItem('github_token_gruta');
+  if(!token){
+    token = prompt('Cole seu Personal Access Token do GitHub (clássico, escopo repo):');
+    if(!token) return null;
+    localStorage.setItem('github_token_gruta', token);
+  }
+  return token;
+}
+
+function resetToken(){
+  localStorage.removeItem('github_token_gruta');
+  showToast('🔐 Token removido. Informe um novo ao salvar.');
+}
 
 // Each month: { year, month(1-12), firstDow(0=Sun), days, notes, special:{day:'label'} }
 const MONTHS_CONFIG = [
@@ -1604,28 +1632,173 @@ function saveDatas(){
 document.getElementById('datasMonthSel').addEventListener('change', renderDatasList);
 document.getElementById('datasOverlay').addEventListener('click', e=>{if(e.target===e.currentTarget)closeDatasModal();});
 
-// ── Export ──
-function exportHTML(){
-  const client=document.getElementById('hdrClient').innerText.trim();
-  const year=document.getElementById('hdrYear').innerText.trim();
-  const sub=document.getElementById('hdrSub').innerText.trim();
-  let src=document.documentElement.outerHTML;
-  src=src.replace(/(<span contenteditable="true" id="hdrClient"[^>]*>)[^<]*/,`$1${client}`);
-  src=src.replace(/(<em contenteditable="true" id="hdrYear"[^>]*>)[^<]*/,`$1${year}`);
-  src=src.replace(/(<span class="sub" contenteditable="true" id="hdrSub"[^>]*>)[^<]*/,`$1${sub}`);
-  src=src.replace(/let POSTS = \[[\s\S]*?\];/,`let POSTS = ${JSON.stringify(POSTS)};`);
-  src=src.replace(/let PLAN_DATA = \{[\s\S]*?\};/,`let PLAN_DATA = ${JSON.stringify(PLAN_DATA)};`);
-  src = src.replace(/\/\/ __SPECIALS_PATCH__[\s\S]*?\/\/ __END_SPECIALS_PATCH__/, '');
-  const specialsPatch = ``;
-  // Atualiza apenas os dados editáveis no HTML exportado
-  src=src.replace(/let POSTS = \[[\s\S]*?\];/,`let POSTS = ${JSON.stringify(POSTS)};`);
-  src=src.replace(/let PLAN_DATA = \{[\s\S]*?\};/,`let PLAN_DATA = ${JSON.stringify(PLAN_DATA)};`);
+// ── Collect / Apply / Save / Load state ──
+function collectCalendarState(){
+  document.querySelectorAll('.month-notes').forEach(el=>{
+    const m = Number(el.dataset.month);
+    if(m && MONTHS_CONFIG[m-1]) MONTHS_CONFIG[m-1].notes = el.innerHTML;
+  });
+  return {
+    posts:        POSTS,
+    planData:     PLAN_DATA,
+    monthsConfig: MONTHS_CONFIG,
+    header: {
+      client: document.getElementById('hdrClient')?.innerHTML || '',
+      year:   document.getElementById('hdrYear')?.innerHTML  || '',
+      sub:    document.getElementById('hdrSub')?.innerHTML   || ''
+    }
+  };
+}
 
-  const slug=(client||'cliente').toLowerCase().replace(/\s+/g,'-');
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([src],{type:'text/html'}));
-  a.download=`calendario_editorial_${slug}_${year}.html`;a.click();
-  showToast('💾 HTML salvo com todas as edições e imagens!');
+function applyCalendarState(state){
+  if(!state) return;
+  if(Array.isArray(state.posts) && state.posts.length){
+    POSTS.length = 0;
+    state.posts.forEach(p => POSTS.push(p));
+  }
+  if(state.planData && typeof state.planData === 'object'){
+    Object.assign(PLAN_DATA, state.planData);
+  }
+  if(Array.isArray(state.monthsConfig) && state.monthsConfig.length){
+    state.monthsConfig.forEach((mc, i)=>{
+      if(MONTHS_CONFIG[i]) Object.assign(MONTHS_CONFIG[i], mc);
+    });
+  }
+  if(state.header){
+    const hc = document.getElementById('hdrClient');
+    const hy = document.getElementById('hdrYear');
+    const hs = document.getElementById('hdrSub');
+    if(hc && state.header.client) hc.innerHTML = state.header.client;
+    if(hy && state.header.year)   hy.innerHTML = state.header.year;
+    if(hs && state.header.sub)    hs.innerHTML = state.header.sub;
+  }
+}
+
+function carregarAlteracoesSalvas(){
+  if(window.__PERSISTED_CALENDAR_STATE__){
+    try{ applyCalendarState(window.__PERSISTED_CALENDAR_STATE__); }
+    catch(err){ console.warn('Erro ao aplicar estado persistido:', err); }
+  }
+}
+
+async function salvarAlteracoes(){
+  const token = getToken();
+  if(!token) return;
+
+  const { owner, repo, branch, path } = GITHUB_CONFIG;
+
+  try{
+    showToast('⏳ Salvando no GitHub…');
+
+    document.querySelectorAll('.month-notes').forEach(el=>{
+      const m = Number(el.dataset.month);
+      if(m && MONTHS_CONFIG[m-1]) MONTHS_CONFIG[m-1].notes = el.innerHTML;
+    });
+
+    const client = (document.getElementById('hdrClient')?.innerText || '').trim();
+    const year   = (document.getElementById('hdrYear')?.innerText   || '').trim();
+    const sub    = (document.getElementById('hdrSub')?.innerText    || '').trim();
+
+    const stateJson = JSON.stringify({
+      posts:        POSTS,
+      planData:     PLAN_DATA,
+      monthsConfig: MONTHS_CONFIG,
+      header:{ client, year, sub }
+    });
+
+    let source = document.documentElement.outerHTML;
+
+    // 1. Update header contenteditable texts
+    source = source
+      .replace(/(<span contenteditable="true" id="hdrClient"[^>]*>)[^<]*/,  `$1${client}`)
+      .replace(/(<em contenteditable="true" id="hdrYear"[^>]*>)[^<]*/,      `$1${year}`)
+      .replace(/(<span class="sub" contenteditable="true" id="hdrSub"[^>]*>)[^<]*/, `$1${sub}`);
+
+    // 2. Update data structures inline
+    source = source
+      .replace(/const MONTHS_CONFIG = \[[\s\S]*?\];\n\n\/\/ Pre-filled posts per month/,
+        `const MONTHS_CONFIG = ${JSON.stringify(MONTHS_CONFIG, null, 2)};\n\n// Pre-filled posts per month`)
+      .replace(/let POSTS = \[[\s\S]*?\];\n\n\/\/ Ensure imgs array on every post/,
+        `let POSTS = ${JSON.stringify(POSTS)};\n\n// Ensure imgs array on every post`)
+      .replace(/let PLAN_DATA = \{[\s\S]*?\};\n\nfunction getPlan/,
+        `let PLAN_DATA = ${JSON.stringify(PLAN_DATA)};\n\nfunction getPlan`);
+
+    // 3. Inject / update __PERSISTED_CALENDAR_STATE__ block
+    const stateBlock = `<script id="__persisted_state_script__">window.__PERSISTED_CALENDAR_STATE__=${stateJson};<\/script>`;
+    if(source.includes('id="__persisted_state_script__"')){
+      source = source.replace(/<script id="__persisted_state_script__">[\s\S]*?<\/script>/, stateBlock);
+    } else {
+      source = source.replace('<script>', stateBlock + '\n<script>');
+    }
+
+    // 4. Get SHA
+    const getRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+      headers:{ Authorization:`Bearer ${token}`, Accept:'application/vnd.github+json' }
+    });
+    if(!getRes.ok){
+      const err = await getRes.json().catch(()=>({}));
+      throw new Error(err.message || 'Erro ao buscar arquivo no GitHub.');
+    }
+    const current = await getRes.json();
+    const content = btoa(unescape(encodeURIComponent(source)));
+
+    // 5. PUT updated file
+    const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+      method: 'PUT',
+      headers:{ Authorization:`Bearer ${token}`, Accept:'application/vnd.github+json' },
+      body: JSON.stringify({
+        message: `Atualiza calendário Gruta das Estrelas — ${new Date().toLocaleDateString('pt-BR')}`,
+        content,
+        sha: current.sha,
+        branch
+      })
+    });
+    if(!putRes.ok){
+      const err = await putRes.json().catch(()=>({}));
+      throw new Error(err.message || 'Erro ao salvar no GitHub.');
+    }
+
+    showToast('✅ Alterações salvas no site com sucesso!');
+  }catch(err){
+    console.error(err);
+    if(String(err.message||'').toLowerCase().includes('bad credentials')){
+      localStorage.removeItem('github_token_gruta');
+      showToast('❌ Token inválido. Token removido — informe um novo ao tentar novamente.');
+    } else {
+      showToast('❌ Erro ao salvar: ' + (err.message || 'falha desconhecida'));
+    }
+  }
+}
+
+// ── Export local ──
+function exportHTML(){
+  const client = document.getElementById('hdrClient').innerText.trim();
+  const year   = document.getElementById('hdrYear').innerText.trim();
+  const sub    = document.getElementById('hdrSub').innerText.trim();
+
+  document.querySelectorAll('.month-notes').forEach(el=>{
+    const m = Number(el.dataset.month);
+    if(m && MONTHS_CONFIG[m-1]) MONTHS_CONFIG[m-1].notes = el.innerHTML;
+  });
+
+  let src = document.documentElement.outerHTML;
+  src = src
+    .replace(/(<span contenteditable="true" id="hdrClient"[^>]*>)[^<]*/,  `$1${client}`)
+    .replace(/(<em contenteditable="true" id="hdrYear"[^>]*>)[^<]*/,      `$1${year}`)
+    .replace(/(<span class="sub" contenteditable="true" id="hdrSub"[^>]*>)[^<]*/, `$1${sub}`)
+    .replace(/const MONTHS_CONFIG = \[[\s\S]*?\];\n\n\/\/ Pre-filled posts per month/,
+      `const MONTHS_CONFIG = ${JSON.stringify(MONTHS_CONFIG, null, 2)};\n\n// Pre-filled posts per month`)
+    .replace(/let POSTS = \[[\s\S]*?\];\n\n\/\/ Ensure imgs array on every post/,
+      `let POSTS = ${JSON.stringify(POSTS)};\n\n// Ensure imgs array on every post`)
+    .replace(/let PLAN_DATA = \{[\s\S]*?\};\n\nfunction getPlan/,
+      `let PLAN_DATA = ${JSON.stringify(PLAN_DATA)};\n\nfunction getPlan`);
+
+  const slug = (client||'gruta').toLowerCase().replace(/\s+/g,'-');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([src],{type:'text/html'}));
+  a.download = `calendario_editorial_${slug}_${year}.html`;
+  a.click();
+  showToast('📥 HTML salvo com todas as edições e imagens!');
 }
 
 function showToast(msg){
@@ -1637,6 +1810,7 @@ document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target
 
 // ── Init ──
 buildMonthNav();
+carregarAlteracoesSalvas();
 renderAll();
 document.body.classList.remove('view-mode');
 
@@ -1655,5 +1829,3 @@ document.querySelectorAll('.month-block').forEach(el=>observer.observe(el));
 
 
 </body></html>
-
-<!-- GitHub Save Logic Injected -->
